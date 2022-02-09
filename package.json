@@ -1,0 +1,15 @@
+{
+  "name": "hidden-unicorns",
+  "version": "0.9.5-bob",
+  "description": "Steganographed artworks for artistic rights protection.",
+  "main": "index.js",
+  "repository": "https://github.com/spuuntries/hidden-unicorns.git",
+  "author": "spuun <kek@spuun.art>",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "dependencies": {
+    "discord.js": "^13.6.0",
+    "dotenv": "^16.0.0",
+    "sharp": "^0.30.0"
+  }
+}
