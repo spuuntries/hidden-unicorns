@@ -10,6 +10,8 @@
   "dependencies": {
     "discord.js": "^13.6.0",
     "dotenv": "^16.0.0",
-    "sharp": "^0.30.0"
+    "is-stream": "^3.0.0",
+    "sharp": "^0.30.0",
+    "steggy-noencrypt": "^2.0.3"
   }
 }
