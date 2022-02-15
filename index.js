@@ -1,6 +1,5 @@
-const { channel } = require("diagnostics_channel");
-
 require("dotenv").config();
+var isStream;
 const procenv = process.env,
   Discord = require("discord.js"),
   client = new Discord.Client({
@@ -14,9 +13,13 @@ const procenv = process.env,
     ],
   }),
   sharp = require("sharp"),
-  steggy = require("steggy-noencrypt"),
-  isStream = import("is-stream"),
+  stego = require("f5stegojs"),
+  steg = new stego(procenv.F5KEY),
   pkg = require("./package.json");
+
+(async () => {
+  isStream = await import("is-stream");
+})();
 
 /**
  * Logger function.
@@ -151,11 +154,19 @@ ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
                 )
                   return;
 
-                if (!attachment.contentType.endsWith("png"))
-                  tempAttachment = await sharp(tempAttachment).png().toBuffer();
+                if (
+                  !attachment.contentType.endsWith("jpeg") ||
+                  !attachment.contentType.endsWith("jpg")
+                )
+                  tempAttachment = await sharp(tempAttachment)
+                    .jpeg()
+                    .toBuffer();
 
-                /** @type {Buffer} */
-                let stegged = steggy.reveal(tempAttachment);
+                try {
+                  let stegged = Buffer.from(steg.extract(tempAttachment));
+                } catch (err) {
+                  logger(`Failed to extract data from image: ${err}`);
+                }
 
                 resVerdicts.push(stegged);
               }
@@ -227,27 +238,38 @@ Do any of the above commands with an attachment in the message.`,
       let attachments = message.attachments,
         resAttachments = [];
 
-      attachments.forEach(async (attachment) => {
-        if (attachment.contentType.startsWith("image/")) {
-          let tempAttachment = attachment.attachment;
-          if (
-            isStream.isStream(attachment.attachment) ||
-            !Buffer.isBuffer(attachment.attachment)
-          )
-            return;
+      let promiseWaitForAttachments = new Promise((resolve, reject) => {
+        try {
+          attachments.forEach(async (attachment, i) => {
+            if (attachment.contentType.startsWith("image/")) {
+              let tempAttachment = attachment.attachment;
+              if (
+                isStream.isStream(attachment.attachment) ||
+                !Buffer.isBuffer(attachment.attachment)
+              )
+                return;
 
-          if (!attachment.contentType.endsWith("png"))
-            tempAttachment = await sharp(tempAttachment).png().toBuffer();
+              if (!attachment.contentType.endsWith("png"))
+                tempAttachment = await sharp(tempAttachment).png().toBuffer();
 
-          /** @type {Buffer} */
-          let stegged = steggy.conceal(
-            tempAttachment,
-            `Sent by ${message.author.username}#${message.author.discriminator} in ${message.guild.name} (#${message.channel.name})`
-          );
+              /** @type {Buffer} */
+              let stegged = steggy.conceal()(
+                tempAttachment,
+                `Sent by ${message.author.username}#${message.author.discriminator} in ${message.guild.name} (#${message.channel.name})`
+              );
 
-          resAttachments.push(stegged);
+              resAttachments.push(stegged);
+              if (i == attachments.size - 1) resolve(resAttachments);
+            }
+          });
+        } catch (err) {
+          reject(err);
         }
       });
+
+      logger(`Processing attachments for ${message.url}`);
+      await Promise.all([promiseWaitForAttachments]);
+      logger(`Created ${resAttachments.length} attachments for ${message.url}`);
 
       await message.delete();
 
@@ -257,7 +279,7 @@ Do any of the above commands with an attachment in the message.`,
         .setTitle(`🦄 ${message.author.username} sent a message 🔮`)
         .setDescription(
           `${message.author.toString()} sent this message:\n"${
-            message.content
+            message.content ? message.content : "No content"
           }"`
         )
         .setAuthor({
@@ -269,7 +291,7 @@ Do any of the above commands with an attachment in the message.`,
       try {
         await message.channel.send({
           embeds: [embed],
-          attachments: resAttachments,
+          files: resAttachments,
         });
       } catch (err) {
         logger(`Failed to send embed for ${message.url}, ${err}`);
