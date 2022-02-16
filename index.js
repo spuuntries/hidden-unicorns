@@ -14,7 +14,7 @@ const procenv = process.env,
   }),
   sharp = require("sharp"),
   stego = require("f5stegojs"),
-  steg = new stego(procenv.F5KEY),
+  axios = require("axios").default,
   pkg = require("./package.json");
 
 (async () => {
@@ -54,12 +54,25 @@ client.on("messageCreate", async (message) => {
         .trim()
         .slice(`${procenv.PREFIX}unicorn`.length)
         .split(/ +/g),
-      prefixAndCommand = args.shift();
+      prefixAndCommand = args.shift(),
+      steg = new stego(message.author.id);
 
     switch (args[0]) {
       case "find":
       case "detect":
       case "verify":
+        // Role checking for moderators
+        let staffArray = procenv.STAFFROLES.split("|");
+        if (
+          !message.member.roles.cache.find((r) =>
+            staffArray.includes(r.name)
+          ) ||
+          !message.member.roles.cache.find((r) => staffArray.includes(r.id))
+        )
+          return await message.reply(
+            "You don't have permission to use this command."
+          );
+
         try {
           if (message.attachments.size == 0) {
             if (args.length < 2) {
@@ -96,7 +109,8 @@ client.on("messageCreate", async (message) => {
 
             attachments.forEach(async (attachment) => {
               if (attachment.contentType.startsWith("image/")) {
-                let tempAttachment = attachment.attachment;
+                let tempAttachment = attachment.attachment,
+                  unstegged;
                 if (
                   isStream.isStream(attachment.attachment) ||
                   !Buffer.isBuffer(attachment.attachment)
@@ -106,10 +120,12 @@ client.on("messageCreate", async (message) => {
                 if (!attachment.contentType.endsWith("png"))
                   tempAttachment = await sharp(tempAttachment).png().toBuffer();
 
-                /** @type {Buffer} */
-                let stegged = steggy.reveal(tempAttachment);
-
-                resVerdicts.push(stegged);
+                try {
+                  unstegged = Buffer.from(steg.extract(tempAttachment));
+                  resVerdicts.push(unstegged);
+                } catch (err) {
+                  logger(`Failed to extract data from image: ${err}`);
+                }
               }
             });
 
@@ -126,7 +142,7 @@ ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
               embed.setColor("#ff0000");
               embed.setTitle("Verification failed!");
               embed.setDescription(
-                `**The message was not verified!**\nThe message was not encrypted with the unicorn!`
+                `**The message was not verified!**\nIt doesn't have any unicorns!`
               );
             }
 
@@ -147,28 +163,23 @@ ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
 
             attachments.forEach(async (attachment) => {
               if (attachment.contentType.startsWith("image/")) {
-                let tempAttachment = attachment.attachment;
+                let tempAttachment = attachment.attachment,
+                  unstegged;
                 if (
                   isStream.isStream(attachment.attachment) ||
                   !Buffer.isBuffer(attachment.attachment)
                 )
                   return;
 
-                if (
-                  !attachment.contentType.endsWith("jpeg") ||
-                  !attachment.contentType.endsWith("jpg")
-                )
-                  tempAttachment = await sharp(tempAttachment)
-                    .jpeg()
-                    .toBuffer();
+                if (!attachment.contentType.endsWith("png"))
+                  tempAttachment = await sharp(tempAttachment).png().toBuffer();
 
                 try {
-                  let stegged = Buffer.from(steg.extract(tempAttachment));
+                  unstegged = Buffer.from(steg.extract(tempAttachment));
+                  resVerdicts.push(unstegged);
                 } catch (err) {
                   logger(`Failed to extract data from image: ${err}`);
                 }
-
-                resVerdicts.push(stegged);
               }
             });
 
@@ -185,7 +196,7 @@ ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
               embed.setColor("#ff0000");
               embed.setTitle("Verification failed!");
               embed.setDescription(
-                `**The message was not verified!**\nThe message was not encrypted with the unicorn!`
+                `**The message was not verified!**\nIt doesn't have any unicorns!`
               );
             }
 
@@ -236,41 +247,98 @@ Do any of the above commands with an attachment in the message.`,
   if (message.attachments.size > 0) {
     try {
       let attachments = message.attachments,
-        resAttachments = [];
+        resAttachments = [],
+        errArray = [],
+        steg = new stego(message.author.id);
 
-      let promiseWaitForAttachments = new Promise((resolve, reject) => {
+      logger(`Handling attachments for ${message.url}`);
+      let promise = new Promise((resolve, reject) => {
         try {
           attachments.forEach(async (attachment, i) => {
+            logger(`Handling attachment ${i + 1} of ${attachments.size}`);
             if (attachment.contentType.startsWith("image/")) {
               let tempAttachment = attachment.attachment;
+              if (isStream.isStream(attachment.attachment)) {
+                return logger(`Attachment ${i + 1} is a stream!`);
+              }
+
+              if (!Buffer.isBuffer(attachment.attachment)) {
+                logger(
+                  `Attachment ${
+                    i + 1
+                  } is not a buffer! \nIt's a ${typeof attachment.attachment}\nChecking if it's a URL...`
+                );
+
+                let url;
+                try {
+                  url = new URL(attachment.attachment);
+                } catch (err) {
+                  logger(`It's not a URL.`);
+                }
+
+                if (url) {
+                  logger(`It's a URL!`);
+                  try {
+                    logger(`Attempting to download attachment ${i + 1}...`);
+                    tempAttachment = await axios.get(url.href);
+                    logger(
+                      `Downloaded attachment ${
+                        i + 1
+                      }, now converting to buffer...`
+                    );
+                    tempAttachment = Buffer.from(tempAttachment.data);
+                    logger(
+                      `Converted attachment ${
+                        i + 1
+                      } to buffer!, is buffer: ${Buffer.isBuffer(
+                        tempAttachment
+                      )}`
+                    );
+                  } catch (err) {
+                    logger(`Failed to get attachment: ${err}`);
+                  }
+                } else {
+                  return;
+                }
+              }
+
               if (
-                isStream.isStream(attachment.attachment) ||
-                !Buffer.isBuffer(attachment.attachment)
-              )
-                return;
+                !attachment.contentType.endsWith("jpg") ||
+                !attachment.contentType.endsWith("jpeg")
+              ) {
+                logger(
+                  `Checking if attachment ${i + 1} is a buffer to make sure.
+Is buffer: ${Buffer.isBuffer(tempAttachment)}`
+                );
+                logger(`Converting attachment ${i + 1} to jpg`);
+                tempAttachment = await sharp(tempAttachment).jpeg().toBuffer();
+                logger(`Converted attachment ${i + 1} to jpg`);
+              }
 
-              if (!attachment.contentType.endsWith("png"))
-                tempAttachment = await sharp(tempAttachment).png().toBuffer();
-
-              /** @type {Buffer} */
-              let stegged = steggy.conceal()(
+              let stegged = steg.embed(
                 tempAttachment,
-                `Sent by ${message.author.username}#${message.author.discriminator} in ${message.guild.name} (#${message.channel.name})`
+                `Sent by ${message.author.username}#${message.author.discriminator} <@${message.author.id}>, ${message.url}`
               );
 
               resAttachments.push(stegged);
+              logger(`Attachment ${i + 1} of ${attachments.size} handled`);
               if (i == attachments.size - 1) resolve(resAttachments);
             }
           });
         } catch (err) {
-          reject(err);
+          errArray.push(err);
+          reject(errArray);
         }
       });
 
-      logger(`Processing attachments for ${message.url}`);
-      await Promise.all([promiseWaitForAttachments]);
-      logger(`Created ${resAttachments.length} attachments for ${message.url}`);
-
+      try {
+        await promise;
+        logger(`Successfully handled attachments for ${message.url}`);
+      } catch (err) {
+        return logger(
+          `Failed to embed data in image in ${message.url}, ${errArray}`
+        );
+      }
       await message.delete();
 
       // Make an embed to send along with the attachments
@@ -289,15 +357,15 @@ Do any of the above commands with an attachment in the message.`,
         .setTimestamp();
 
       try {
-        await message.channel.send({
+        return await message.channel.send({
           embeds: [embed],
           files: resAttachments,
         });
       } catch (err) {
-        logger(`Failed to send embed for ${message.url}, ${err}`);
+        return logger(`Failed to send embed for ${message.url}, ${err}`);
       }
     } catch (err) {
-      logger(`Failed to send message for ${message.url}, ${err}`);
+      return logger(`Failed to send message for ${message.url}, ${err}`);
     }
   }
 });
