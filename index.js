@@ -14,6 +14,7 @@ const procenv = process.env,
   }),
   sharp = require("sharp"),
   stego = require("f5stegojs"),
+  fileTypes = ["jpg", "jpeg", "png"],
   axios = require("axios").default,
   pkg = require("./package.json");
 
@@ -253,10 +254,12 @@ Do any of the above commands with an attachment in the message.`,
 
       logger(`Handling attachments for ${message.url}`);
       let promise = new Promise((resolve, reject) => {
-        try {
-          attachments.forEach(async (attachment, i) => {
+        let stegged;
+        Array.from(attachments).forEach(async (a, i) => {
+          let attachment = a[1];
+          try {
             logger(`Handling attachment ${i + 1} of ${attachments.size}`);
-            if (attachment.contentType.startsWith("image/")) {
+            if (fileTypes.includes(attachment.contentType.split("/")[1])) {
               let tempAttachment = attachment.attachment;
               if (isStream.isStream(attachment.attachment)) {
                 return logger(`Attachment ${i + 1} is a stream!`);
@@ -279,20 +282,15 @@ Do any of the above commands with an attachment in the message.`,
                 if (url) {
                   logger(`It's a URL!`);
                   try {
-                    logger(`Attempting to download attachment ${i + 1}...`);
-                    tempAttachment = await axios.get(url.href);
+                    logger(`Attempting to download attachment ${i + 1}..`);
+                    let res = await axios.get(url.href, {
+                      responseType: "arraybuffer",
+                    });
+                    tempAttachment = res.data;
                     logger(
                       `Downloaded attachment ${
                         i + 1
-                      }, now converting to buffer...`
-                    );
-                    tempAttachment = Buffer.from(tempAttachment.data);
-                    logger(
-                      `Converted attachment ${
-                        i + 1
-                      } to buffer!, is buffer: ${Buffer.isBuffer(
-                        tempAttachment
-                      )}`
+                      }, is buffer: ${Buffer.isBuffer(tempAttachment)}`
                     );
                   } catch (err) {
                     logger(`Failed to get attachment: ${err}`);
@@ -302,43 +300,92 @@ Do any of the above commands with an attachment in the message.`,
                 }
               }
 
+              logger(
+                `Checking if attachment ${i + 1} is a buffer to make sure.
+Is buffer: ${Buffer.isBuffer(tempAttachment)}`
+              );
+
               if (
                 !attachment.contentType.endsWith("jpg") ||
                 !attachment.contentType.endsWith("jpeg")
               ) {
-                logger(
-                  `Checking if attachment ${i + 1} is a buffer to make sure.
-Is buffer: ${Buffer.isBuffer(tempAttachment)}`
-                );
                 logger(`Converting attachment ${i + 1} to jpg`);
-                tempAttachment = await sharp(tempAttachment).jpeg().toBuffer();
+                tempAttachment = await sharp(tempAttachment)
+                  .jpeg({ quality: 100 })
+                  .toBuffer();
                 logger(`Converted attachment ${i + 1} to jpg`);
               }
 
-              let stegged = steg.embed(
-                tempAttachment,
-                `Sent by ${message.author.username}#${message.author.discriminator} <@${message.author.id}>, ${message.url}`
-              );
+              try {
+                stegged = Buffer.from(
+                  steg.embed(
+                    tempAttachment,
+                    Buffer.from(
+                      `Sent by ${message.author.username}#${message.author.discriminator} <@${message.author.id}>, ${message.url}`
+                    )
+                  )
+                );
+                logger(
+                  `Stegged attachment ${i + 1}, metadata: ${JSON.stringify(
+                    await sharp(stegged).metadata()
+                  )}`
+                );
+              } catch (err) {
+                logger(`Failed to embed data in attachment ${i + 1}, ${err}`);
+                errArray.push(err);
+              }
+
+              try {
+                let contentType = attachment.contentType.split("/")[1];
+                logger(
+                  `Converting attachment ${
+                    i + 1
+                  } back to previous type, ${contentType}`
+                );
+                /*
+                let converted = await sharp(tempAttachment)
+                  .toFormat(contentType == "jpg" ? "jpeg" : contentType)
+                  .toBuffer();
+                  */
+                converted = stegged;
+                stegged = new Discord.MessageAttachment(
+                  converted,
+                  `${attachment.name}`
+                );
+                logger(
+                  `Converted attachment ${i + 1} to ${
+                    (await sharp(stegged.attachment).metadata()).format
+                  }`
+                );
+              } catch (err) {
+                logger(
+                  `Failed to convert attachment ${
+                    i + 1
+                  } back to original type, ${err}`
+                );
+                errArray.push(err);
+              }
 
               resAttachments.push(stegged);
-              logger(`Attachment ${i + 1} of ${attachments.size} handled`);
+              logger(
+                `Attachment ${i + 1} of ${
+                  attachments.size
+                } handled, metadata: ${JSON.stringify(
+                  await sharp(stegged.attachment).metadata()
+                )}`
+              );
               if (i == attachments.size - 1) resolve(resAttachments);
             }
-          });
-        } catch (err) {
-          errArray.push(err);
-          reject(errArray);
-        }
+          } catch (err) {
+            errArray.push(err);
+            if (i == attachments.size - 1) reject(errArray);
+          }
+        });
       });
 
-      try {
-        await promise;
-        logger(`Successfully handled attachments for ${message.url}`);
-      } catch (err) {
-        return logger(
-          `Failed to embed data in image in ${message.url}, ${errArray}`
-        );
-      }
+      await promise;
+      if (errArray.length > 0)
+        return logger(`Failed to handle attachments: ${errArray}`);
       await message.delete();
 
       // Make an embed to send along with the attachments
