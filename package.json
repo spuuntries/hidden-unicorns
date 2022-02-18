@@ -13,6 +13,8 @@
     "dotenv": "^16.0.0",
     "f5stegojs": "^0.1.2",
     "is-stream": "^3.0.0",
-    "sharp": "^0.30.0"
+    "lsbtools": "^0.0.1",
+    "sharp": "^0.30.0",
+    "stegcloak": "^1.1.1"
   }
 }
