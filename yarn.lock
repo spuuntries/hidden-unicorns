@@ -793,14 +793,6 @@ lru-cache@^6.0.0:
   dependencies:
     yallist "^4.0.0"
 
-lsbtools@^0.0.1:
-  version "0.0.1"
-  resolved "https://registry.yarnpkg.com/lsbtools/-/lsbtools-0.0.1.tgz#adb16fb78427ef123e5e268d6df400743750af31"
-  integrity sha1-rbFvt4Qn7xI+XiaNbfQAdDdQrzE=
-  dependencies:
-    minimist "^1.2.0"
-    pngjs "^3.0.0"
-
 lzutf8@^0.5.5:
   version "0.5.8"
   resolved "https://registry.yarnpkg.com/lzutf8/-/lzutf8-0.5.8.tgz#e07c531ad086258c0d842646bd3b973565823330"
@@ -993,7 +985,7 @@ pbkdf2@^3.0.17, pbkdf2@^3.0.3:
     safe-buffer "^5.0.1"
     sha.js "^2.4.8"
 
-pngjs@^3.0.0:
+pngjs@^3.0.1:
   version "3.4.0"
   resolved "https://registry.yarnpkg.com/pngjs/-/pngjs-3.4.0.tgz#99ca7d725965fb655814eaf65f38f12bbdbf555f"
   integrity sha512-NCrCHhWmnQklfH4MtJMRjZ2a8c80qXeMlQMv2uVp9ISJMTt562SbGd6n2oq0PaPgKm7Z6pL9E2UlLIhC+SHL3w==
@@ -1234,6 +1226,13 @@ stegcloak@^1.1.1:
     randombytes "^2.1.0"
     safe-buffer "^5.2.0"
     timing-safe-equal "^1.0.0"
+
+steggy@^2.0.1:
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/steggy/-/steggy-2.0.1.tgz#c12726e3cdbe5218da25c4994a41706aebae7a45"
+  integrity sha1-wScm482+UhjaJcSZSkFwauuuekU=
+  dependencies:
+    pngjs "^3.0.1"
 
 string-width@^1.0.1:
   version "1.0.2"

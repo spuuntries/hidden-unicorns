@@ -1,5 +1,5 @@
 const f5stego = require("f5stegojs"),
-  lsbtools = require("lsbtools"),
+  steggy = require("steggy"),
   sharp = require("sharp"),
   dotenv = require("dotenv"),
   StegCloak = require("stegcloak"),
@@ -54,7 +54,12 @@ function decrypt(message, key) {
  * @returns {Promise<String|Uint8Array|Buffer>} - The embedded message.
  */
 async function embed(cover, message, options = {}) {
-  let coverData, stegged;
+  let coverData = cover,
+    stegged;
+
+  if (!options) {
+    var options = {};
+  }
 
   if (options) {
     if (options.encryptionKey) {
@@ -74,9 +79,9 @@ async function embed(cover, message, options = {}) {
     try {
       coverData = (await sharp(coverData).metadata())
         ? sharp(coverData)
-        : coverData.toString();
+        : coverData;
     } catch (e) {
-      coverData = coverData.toString();
+      coverData = coverData;
     }
   }
 
@@ -91,17 +96,13 @@ async function embed(cover, message, options = {}) {
             ? process.env.shuffleKey
             : "key"
         );
-        stegged = stego.embed(coverData, bufferedMessage);
+        stegged = await coverData.toBuffer();
+        stegged = stego.embed(stegged, bufferedMessage);
+        stegged = Buffer.from(stegged);
         break;
       case "png":
         stegged = await coverData.toBuffer();
-        lsbtools.write(stegged, bufferedMessage, {
-          key: options.shuffleKey
-            ? options.shuffleKey
-            : process.env.shuffleKey
-            ? process.env.shuffleKey
-            : Buffer.from("key"),
-        });
+        stegged = steggy.conceal()(stegged, message);
         break;
     }
   }
@@ -123,7 +124,12 @@ async function embed(cover, message, options = {}) {
  * @returns {Promise<String|Buffer>} - The extracted message.
  */
 async function extract(cover, options = {}) {
-  let coverData, message;
+  let coverData = cover,
+    message;
+
+  if (!options) {
+    var options = {};
+  }
 
   if (cover instanceof Uint8Array || Buffer.isBuffer(cover)) {
     if (cover instanceof Uint8Array) {
@@ -133,20 +139,12 @@ async function extract(cover, options = {}) {
     if (Buffer.isBuffer(cover)) {
       coverData = cover;
     }
-
-    try {
-      coverData = (await sharp(coverData).metadata())
-        ? sharp(coverData)
-        : coverData.toString();
-    } catch (e) {
-      coverData = coverData.toString();
-    }
   }
 
-  if (coverData instanceof sharp) {
-    switch ((await coverData.metadata()).format) {
+  if (Buffer.isBuffer(coverData)) {
+    switch ((await sharp(coverData).metadata()).format) {
       case "jpeg":
-        coverData = await coverData.toBuffer();
+        message = coverData;
         let stego = new f5stego(
           options.shuffleKey
             ? options.shuffleKey
@@ -154,19 +152,12 @@ async function extract(cover, options = {}) {
             ? process.env.shuffleKey
             : "key"
         );
-        message = stego.extract(coverData);
+        message = stego.extract(message);
         message = Buffer.from(message);
         break;
       case "png":
-        message = await coverData.toBuffer();
-        lsbtools.read(message, {
-          key: options.shuffleKey
-            ? options.shuffleKey
-            : process.env.shuffleKey
-            ? process.env.shuffleKey
-            : Buffer.from("key"),
-        });
-        message = Buffer.from(message);
+        message = coverData;
+        message = steggy.reveal()(message);
         break;
     }
   }
@@ -176,8 +167,10 @@ async function extract(cover, options = {}) {
     message = stegcloak.reveal(coverData);
   }
 
-  if (options.encryptionKey) {
-    message = decrypt(message, options.encryptionKey);
+  if (options) {
+    if (options.encryptionKey) {
+      message = decrypt(message, options.encryptionKey);
+    }
   }
 
   return message;
