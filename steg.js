@@ -112,6 +112,9 @@ async function embed(cover, message, options = {}) {
     stegged = stegcloak.hide(message, "", coverData);
   }
 
+  if (!stegged || Buffer.from(stegged).byteLength == 0)
+    throw new Error("Failed to embed message.");
+
   return stegged;
 }
 
@@ -172,6 +175,9 @@ async function extract(cover, options = {}) {
       message = decrypt(message, options.encryptionKey);
     }
   }
+
+  if (!message || Buffer.from(message).byteLength == 0)
+    throw new Error("No message found.");
 
   return message;
 }

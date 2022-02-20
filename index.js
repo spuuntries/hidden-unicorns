@@ -13,9 +13,11 @@ const procenv = process.env,
     ],
   }),
   sharp = require("sharp"),
-  stego = require("f5stegojs"),
   fileTypes = ["jpg", "jpeg", "png"],
   axios = require("axios").default,
+  fs = require("fs"),
+  crypto = require("crypto"),
+  steg = require("./steg.js"),
   pkg = require("./package.json");
 
 (async () => {
@@ -55,8 +57,7 @@ client.on("messageCreate", async (message) => {
         .trim()
         .slice(`${procenv.PREFIX}unicorn`.length)
         .split(/ +/g),
-      prefixAndCommand = args.shift(),
-      steg = new stego(message.author.id);
+      prefixAndCommand = args.shift();
 
     switch (args[0]) {
       case "find":
@@ -65,10 +66,12 @@ client.on("messageCreate", async (message) => {
         // Role checking for moderators
         let staffArray = procenv.STAFFROLES.split("|");
         if (
-          !message.member.roles.cache.find((r) =>
+          !(await message.member.fetch()).roles.cache.find((r) =>
             staffArray.includes(r.name)
-          ) ||
-          !message.member.roles.cache.find((r) => staffArray.includes(r.id))
+          ) &&
+          !(await message.member.fetch()).roles.cache.find((r) =>
+            staffArray.includes(r.id)
+          )
         )
           return await message.reply(
             "You don't have permission to use this command."
@@ -78,65 +81,101 @@ client.on("messageCreate", async (message) => {
           if (message.attachments.size == 0) {
             if (args.length < 2) {
               return await message.reply({
+                content: "Please provide the channel ID of the message!",
+                allowedMentions: {
+                  repliedUser: false,
+                },
+              });
+            }
+
+            if (args.length < 3) {
+              return await message.reply({
                 content: "Please provide a message ID!",
                 allowedMentions: { repliedUser: false },
               });
             }
 
-            /** @type {Discord.TextChannel} */
-            let messageChannel = (await message.guild.channels.fetch()).find(
-              async (c) =>
-                (await c.messages.fetch({ limit: 100 })).find(
-                  (m) => m.id == args[0]
-                )
-            );
-
-            if (!messageChannel)
+            if (
+              !(await message.guild.channels.fetch()).find(
+                (c) => c.id == args[1]
+              )
+            )
               return await message.reply({
-                content: "Message not found!",
-                allowedMentions: { repliedUser: false },
+                content: "Please provide a valid channel ID!",
+                allowedMentions: {
+                  repliedUser: false,
+                },
               });
 
-            let msg = await messageChannel.messages.fetch(args[0]);
-
-            if (!message.attachments.size > 0)
-              return await message.reply({
-                content: "The message must have an attachment!",
-                allowedMentions: { repliedUser: false },
-              });
+            let msg = await message.channel.messages.fetch(args[2]);
 
             let attachments = msg.attachments,
-              resVerdicts = [];
+              resVerdicts = [],
+              errArray = [];
 
-            attachments.forEach(async (attachment) => {
-              if (attachment.contentType.startsWith("image/")) {
-                let tempAttachment = attachment.attachment,
-                  unstegged;
-                if (
-                  isStream.isStream(attachment.attachment) ||
-                  !Buffer.isBuffer(attachment.attachment)
-                )
-                  return;
-
-                if (!attachment.contentType.endsWith("png"))
-                  tempAttachment = await sharp(tempAttachment).png().toBuffer();
-
-                try {
-                  unstegged = Buffer.from(steg.extract(tempAttachment));
-                  resVerdicts.push(unstegged);
-                } catch (err) {
-                  logger(`Failed to extract data from image: ${err}`);
+            let promise = new Promise((resolve, reject) => {
+              Array.from(attachments).forEach(async (a, i) => {
+                let attachment = await axios.get(a[1].url, {
+                  responseType: "arraybuffer",
+                });
+                if (fileTypes.find((f) => a[1].contentType.includes(f))) {
+                  try {
+                    let extracted = await steg.extract(attachment.data, {
+                      encryptionKey: (() => {
+                        // Check if encryption credentials are set in the env vars,
+                        // If not, generate any of the missing ones and set them in a plaintext file
+                        if (!fs.existsSync("./encryption.txt")) {
+                          let encryptionKey = crypto
+                            .randomBytes(32)
+                            .toString("hex");
+                          fs.writeFileSync("./encryption.txt", encryptionKey);
+                          return encryptionKey;
+                        }
+                        return fs.readFileSync("./encryption.txt").toString();
+                      })(),
+                    });
+                    if (
+                      extracted.toString() ==
+                      `Uploaded by ${msg.author.id} in ${msg.channel.id} at ${msg.createdAt}: ${msg.url}`
+                    )
+                      resVerdicts.push(true);
+                    else resVerdicts.push(false);
+                  } catch (err) {
+                    errArray.push(err);
+                    resVerdicts.push(false);
+                  }
                 }
-              }
+                if (i == attachments.size - 1 && errArray.length > 0)
+                  logger(errArray);
+                if (i == attachments.size - 1) resolve(resVerdicts);
+              });
             });
 
-            let embed = new Discord.MessageEmbed();
+            await promise;
+            let embed = new Discord.MessageEmbed(),
+              steggedContent;
 
-            if (resVerdicts.length > 0) {
+            if (message.content.split(" ").join("\n").split("\n").length > 2) {
+              steggedContent = await steg.extract(message.content, {
+                encryptionKey: (() => {
+                  // Check if encryption credentials are set in the env vars,
+                  // If not, generate any of the missing ones and set them in a plaintext file
+                  if (!fs.existsSync("./encryption.txt")) {
+                    let encryptionKey = crypto.randomBytes(32).toString("hex");
+                    fs.writeFileSync("./encryption.txt", encryptionKey);
+                    return encryptionKey;
+                  }
+                  return fs.readFileSync("./encryption.txt").toString();
+                })(),
+              });
+            }
+
+            if (resVerdicts.length > 0 || steggedContent) {
               embed.setColor("#00ff00");
               embed.setTitle("Verification successful!");
               embed.setDescription(
-                `**The message was successfully verified!**\nThe following bits of data were recovered:\n
+                `**The message was successfully verified!**\nThe following verdicts were recovered:\n
+Content: ${steggedContent ? steggedContent : "false"}\n
 ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
               );
             } else {
@@ -159,38 +198,75 @@ ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
               allowedMentions: { repliedUser: false },
             });
           } else {
-            let attachments = message.attachments,
-              resVerdicts = [];
+            let msg = message;
 
-            attachments.forEach(async (attachment) => {
-              if (attachment.contentType.startsWith("image/")) {
-                let tempAttachment = attachment.attachment,
-                  unstegged;
-                if (
-                  isStream.isStream(attachment.attachment) ||
-                  !Buffer.isBuffer(attachment.attachment)
-                )
-                  return;
+            let attachments = msg.attachments,
+              resVerdicts = [],
+              errArray = [];
 
-                if (!attachment.contentType.endsWith("png"))
-                  tempAttachment = await sharp(tempAttachment).png().toBuffer();
-
-                try {
-                  unstegged = Buffer.from(steg.extract(tempAttachment));
-                  resVerdicts.push(unstegged);
-                } catch (err) {
-                  logger(`Failed to extract data from image: ${err}`);
+            let promise = new Promise((resolve, reject) => {
+              Array.from(attachments).forEach(async (a, i) => {
+                let attachment = await axios.get(a[1].url, {
+                  responseType: "arraybuffer",
+                });
+                if (fileTypes.find((f) => a[1].contentType.includes(f))) {
+                  try {
+                    let extracted = await steg.extract(attachment.data, {
+                      encryptionKey: (() => {
+                        // Check if encryption credentials are set in the env vars,
+                        // If not, generate any of the missing ones and set them in a plaintext file
+                        if (!fs.existsSync("./encryption.txt")) {
+                          let encryptionKey = crypto
+                            .randomBytes(32)
+                            .toString("hex");
+                          fs.writeFileSync("./encryption.txt", encryptionKey);
+                          return encryptionKey;
+                        }
+                        return fs.readFileSync("./encryption.txt").toString();
+                      })(),
+                    });
+                    if (
+                      extracted.toString() ==
+                      `Uploaded by ${msg.author.id} in ${msg.channel.id} at ${msg.createdAt}: ${msg.url}`
+                    )
+                      resVerdicts.push(true);
+                    else resVerdicts.push(false);
+                  } catch (err) {
+                    errArray.push(err);
+                    resVerdicts.push(false);
+                  }
                 }
-              }
+                if (i == attachments.size - 1 && errArray.length > 0)
+                  logger(errArray);
+                if (i == attachments.size - 1) resolve(resVerdicts);
+              });
             });
 
-            let embed = new Discord.MessageEmbed();
+            await promise;
+            let embed = new Discord.MessageEmbed(),
+              steggedContent;
 
-            if (resVerdicts.length > 0) {
+            if (message.content.split(" ").join("\n").split("\n").length > 2) {
+              steggedContent = await steg.extract(message.content, {
+                encryptionKey: (() => {
+                  // Check if encryption credentials are set in the env vars,
+                  // If not, generate any of the missing ones and set them in a plaintext file
+                  if (!fs.existsSync("./encryption.txt")) {
+                    let encryptionKey = crypto.randomBytes(32).toString("hex");
+                    fs.writeFileSync("./encryption.txt", encryptionKey);
+                    return encryptionKey;
+                  }
+                  return fs.readFileSync("./encryption.txt").toString();
+                })(),
+              });
+            }
+
+            if (resVerdicts.length > 0 || steggedContent) {
               embed.setColor("#00ff00");
               embed.setTitle("Verification successful!");
               embed.setDescription(
-                `**The message was successfully verified!**\nThe following bits of data were recovered:\n
+                `**The message was successfully verified!**\nThe following verdicts were recovered:\n
+Content: ${steggedContent ? steggedContent : "false"}\n
 ${resVerdicts.map((v, i) => `${i + 1}.) ${v}`).join("\n")}`
               );
             } else {
@@ -245,174 +321,96 @@ Do any of the above commands with an attachment in the message.`,
 
   if (!contentChannels.includes(message.channel.id)) return;
 
+  let steggedMessage,
+    resAttachments = [];
   if (message.attachments.size > 0) {
-    try {
-      let attachments = message.attachments,
-        resAttachments = [],
-        errArray = [],
-        steg = new stego(message.author.id);
+    let attachments = message.attachments,
+      errArray = [];
 
-      logger(`Handling attachments for ${message.url}`);
-      let promise = new Promise((resolve, reject) => {
-        let stegged;
-        Array.from(attachments).forEach(async (a, i) => {
-          let attachment = a[1];
+    logger(`Handling attachments for ${message.url}`);
+    let promise = new Promise((resolve, reject) => {
+      Array.from(attachments).forEach(async (a, i) => {
+        let attachment = await axios.get(a[1].url, {
+          responseType: "arraybuffer",
+        });
+        if (fileTypes.find((f) => a[1].contentType.includes(f))) {
           try {
-            logger(`Handling attachment ${i + 1} of ${attachments.size}`);
-            if (fileTypes.includes(attachment.contentType.split("/")[1])) {
-              let tempAttachment = attachment.attachment;
-              if (isStream.isStream(attachment.attachment)) {
-                return logger(`Attachment ${i + 1} is a stream!`);
-              }
-
-              if (!Buffer.isBuffer(attachment.attachment)) {
-                logger(
-                  `Attachment ${
-                    i + 1
-                  } is not a buffer! \nIt's a ${typeof attachment.attachment}\nChecking if it's a URL...`
-                );
-
-                let url;
-                try {
-                  url = new URL(attachment.attachment);
-                } catch (err) {
-                  logger(`It's not a URL.`);
-                }
-
-                if (url) {
-                  logger(`It's a URL!`);
-                  try {
-                    logger(`Attempting to download attachment ${i + 1}..`);
-                    let res = await axios.get(url.href, {
-                      responseType: "arraybuffer",
-                    });
-                    tempAttachment = res.data;
-                    logger(
-                      `Downloaded attachment ${
-                        i + 1
-                      }, is buffer: ${Buffer.isBuffer(tempAttachment)}`
-                    );
-                  } catch (err) {
-                    logger(`Failed to get attachment: ${err}`);
+            let stegged = await steg.embed(
+              attachment.data,
+              `Uploaded by ${message.author.id} in ${message.channel.id} at ${message.createdAt}: ${message.url}`,
+              {
+                encryptionKey: (() => {
+                  // Check if encryption credentials are set in the env vars,
+                  // If not, generate any of the missing ones and set them in a plaintext file
+                  if (!fs.existsSync("./encryption.txt")) {
+                    let encryptionKey = crypto.randomBytes(32).toString("hex");
+                    fs.writeFileSync("./encryption.txt", encryptionKey);
+                    return encryptionKey;
                   }
-                } else {
-                  return;
-                }
+                  return fs.readFileSync("./encryption.txt").toString();
+                })(),
               }
-
-              logger(
-                `Checking if attachment ${i + 1} is a buffer to make sure.
-Is buffer: ${Buffer.isBuffer(tempAttachment)}`
-              );
-
-              if (
-                !attachment.contentType.endsWith("jpg") ||
-                !attachment.contentType.endsWith("jpeg")
-              ) {
-                logger(`Converting attachment ${i + 1} to jpg`);
-                tempAttachment = await sharp(tempAttachment)
-                  .jpeg({ quality: 100 })
-                  .toBuffer();
-                logger(`Converted attachment ${i + 1} to jpg`);
-              }
-
-              try {
-                stegged = Buffer.from(
-                  steg.embed(
-                    tempAttachment,
-                    Buffer.from(
-                      `Sent by ${message.author.username}#${message.author.discriminator} <@${message.author.id}>, ${message.url}`
-                    )
-                  )
-                );
-                logger(
-                  `Stegged attachment ${i + 1}, metadata: ${JSON.stringify(
-                    await sharp(stegged).metadata()
-                  )}`
-                );
-              } catch (err) {
-                logger(`Failed to embed data in attachment ${i + 1}, ${err}`);
-                errArray.push(err);
-              }
-
-              try {
-                let contentType = attachment.contentType.split("/")[1];
-                logger(
-                  `Converting attachment ${
-                    i + 1
-                  } back to previous type, ${contentType}`
-                );
-                /*
-                let converted = await sharp(tempAttachment)
-                  .toFormat(contentType == "jpg" ? "jpeg" : contentType)
-                  .toBuffer();
-                  */
-                converted = stegged;
-                stegged = new Discord.MessageAttachment(
-                  converted,
-                  `${attachment.name}`
-                );
-                logger(
-                  `Converted attachment ${i + 1} to ${
-                    (await sharp(stegged.attachment).metadata()).format
-                  }`
-                );
-              } catch (err) {
-                logger(
-                  `Failed to convert attachment ${
-                    i + 1
-                  } back to original type, ${err}`
-                );
-                errArray.push(err);
-              }
-
-              resAttachments.push(stegged);
-              logger(
-                `Attachment ${i + 1} of ${
-                  attachments.size
-                } handled, metadata: ${JSON.stringify(
-                  await sharp(stegged.attachment).metadata()
-                )}`
-              );
-              if (i == attachments.size - 1) resolve(resAttachments);
-            }
-          } catch (err) {
-            errArray.push(err);
-            if (i == attachments.size - 1) reject(errArray);
+            );
+            resAttachments.push(stegged);
+          } catch (error) {
+            errArray.push(error);
           }
-        });
+        }
+        if (i == attachments.size - 1 && errArray.length > 0) resolve(errArray);
+        if (i == attachments.size - 1) resolve(resAttachments);
       });
+    });
 
-      await promise;
-      if (errArray.length > 0)
-        return logger(`Failed to handle attachments: ${errArray}`);
-      await message.delete();
+    await promise;
+    if (errArray.length > 0)
+      return logger(`Failed to handle attachments: ${errArray}`);
+  }
 
-      // Make an embed to send along with the attachments
-      let embed = new Discord.MessageEmbed()
-        .setColor((await message.author.fetch(true)).hexAccentColor)
-        .setTitle(`🦄 ${message.author.username} sent a message 🔮`)
-        .setDescription(
-          `${message.author.toString()} sent this message:\n"${
-            message.content ? message.content : "No content"
-          }"`
-        )
-        .setAuthor({
-          name: message.author.username,
-          iconURL: message.author.displayAvatarURL(),
-        })
-        .setTimestamp();
-
-      try {
-        return await message.channel.send({
-          embeds: [embed],
-          files: resAttachments,
-        });
-      } catch (err) {
-        return logger(`Failed to send embed for ${message.url}, ${err}`);
+  if (message.content.split(" ").join("\n").split("\n").length > 2)
+    steggedMessage = await steg.embed(
+      message.content,
+      `Uploaded by ${message.author.id} in ${message.channel.id} at ${message.createdAt}: ${message.url}`,
+      {
+        encryptionKey: (() => {
+          // Check if encryption credentials are set in the env vars,
+          // If not, generate any of the missing ones and set them in a plaintext file
+          if (!fs.existsSync("./encryption.txt")) {
+            let encryptionKey = crypto.randomBytes(32).toString("hex");
+            fs.writeFileSync("./encryption.txt", encryptionKey);
+            return encryptionKey;
+          }
+          return fs.readFileSync("./encryption.txt").toString();
+        })(),
       }
-    } catch (err) {
-      return logger(`Failed to send message for ${message.url}, ${err}`);
-    }
+    );
+
+  await message.delete();
+
+  // Make an embed to send along with the attachments
+  let embed = new Discord.MessageEmbed()
+    .setColor((await message.author.fetch(true)).hexAccentColor)
+    .setTitle(`🦄 ${message.author.username} sent a message 🔮`)
+    .setDescription(
+      `${message.author.toString()} sent this message:\n"${
+        typeof steggedMessage == "string"
+          ? steggedMessage
+          : message.content
+          ? message.content
+          : "No content"
+      }"`
+    )
+    .setAuthor({
+      name: message.author.username,
+      iconURL: message.author.displayAvatarURL(),
+    })
+    .setTimestamp();
+
+  try {
+    return await message.channel.send({
+      embeds: [embed],
+      files: resAttachments,
+    });
+  } catch (err) {
+    return logger(`Failed to send embed for ${message.url}, ${err}`);
   }
 });
